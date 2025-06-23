@@ -15,8 +15,8 @@ public interface CalculoFinancieroService {
     // Calcula la TCEA del bono
     BigDecimal calcularTCEA(Bono bono);
 
-    // Calcula la TREA para un inversor
-    BigDecimal calcularTREA(Bono bono, BigDecimal tasaEsperada);
+    // Calcula la TREA para un inversor basada en el precio de compra
+    BigDecimal calcularTREA(Bono bono, BigDecimal precioCompra);
 
     // Calcula la duración de Macaulay
     BigDecimal calcularDuracion(Bono bono);

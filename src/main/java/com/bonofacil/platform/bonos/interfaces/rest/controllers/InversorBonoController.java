@@ -92,14 +92,21 @@ public class InversorBonoController {
     @GetMapping("/bonos/{id}/flujo")
     @Operation(summary = "Obtener el flujo financiero de un bono")
     public ResponseEntity<List<FlujoFinancieroResource>> obtenerFlujoFinanciero(@PathVariable Long id) {
-        List<FlujoFinanciero> flujos = bonoService.obtenerFlujoFinancieroBono(id);
-        if (flujos != null) {
-            List<FlujoFinancieroResource> resources = flujos.stream()
-                    .map(FlujoFinancieroResourceFromEntityAssembler::toResourceFromEntity)
-                    .collect(Collectors.toList());
-            return ResponseEntity.ok(resources);
-        }
-        return ResponseEntity.notFound().build();
+        return bonoService.obtenerBonoPorId(id)
+                .map(bono -> {
+                    List<FlujoFinanciero> flujos = bonoService.obtenerFlujoFinancieroBono(id);
+                    
+                    // Si no hay flujos en la base de datos, los generamos automáticamente
+                    if (flujos == null || flujos.isEmpty()) {
+                        flujos = calculoFinancieroService.calcularFlujoFinanciero(bono);
+                    }
+                    
+                    List<FlujoFinancieroResource> resources = flujos.stream()
+                            .map(FlujoFinancieroResourceFromEntityAssembler::toResourceFromEntity)
+                            .collect(Collectors.toList());
+                    return ResponseEntity.ok(resources);
+                })
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @PostMapping("/calculos")

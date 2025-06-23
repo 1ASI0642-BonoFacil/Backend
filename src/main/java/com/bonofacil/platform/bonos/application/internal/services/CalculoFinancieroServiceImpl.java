@@ -36,8 +36,7 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
         int plazoAnios = bono.getPlazoAnios();
         int frecuenciaPagos = bono.getFrecuenciaPagos();
         int totalPeriodos = plazoAnios * frecuenciaPagos;
-        int plazosGraciaTotal = bono.getPlazosGraciaTotal();
-        int plazosGraciaParcial = bono.getPlazosGraciaParcial();
+        // Variables eliminadas - lógica simplificada sin períodos de gracia complejos
         LocalDate fechaEmision = bono.getFechaEmision();
         
         // Identificar el método de amortización real
@@ -62,7 +61,7 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
         // Calcular tasa periódica
         BigDecimal tasaPeriodica = tasaCupon.divide(BigDecimal.valueOf(frecuenciaPagos), SCALE, ROUNDING_MODE);
         
-        // Generar flujos para cada período
+        // NUEVA LÓGICA SIMPLE Y ROBUSTA para MÉTODO AMERICANO
         for (int i = 1; i <= totalPeriodos; i++) {
             FlujoFinanciero flujo = new FlujoFinanciero();
             flujo.setBono(bono);
@@ -72,60 +71,33 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
             LocalDate fechaPeriodo = fechaEmision.plus(i * 12 / frecuenciaPagos, ChronoUnit.MONTHS);
             flujo.setFecha(fechaPeriodo);
 
-            // Determinar si estamos en periodo de gracia
-            boolean esGraciaTotal = i <= plazosGraciaTotal;
-            boolean esGraciaParcial = i > plazosGraciaTotal && i <= (plazosGraciaTotal + plazosGraciaParcial);
+            // LÓGICA SIMPLE: Cupón constante siempre, amortización solo al final
+            BigDecimal cuponPeriodo = valorNominal.multiply(tasaPeriodica, MC);
+            BigDecimal amortizacion;
+            BigDecimal flujoTotal;
+            BigDecimal saldoRestante;
             
-            // Obtener saldo del periodo anterior
-            BigDecimal saldoAnterior = flujos.get(i - 1).getSaldoInsoluto();
-            if (saldoAnterior == null) {
-                saldoAnterior = flujos.get(i - 1).getSaldo();
-            }
-
-            // Interés del periodo basado en el saldo anterior
-            BigDecimal interesPeriodo = saldoAnterior.multiply(tasaPeriodica, MC);
-            
-            BigDecimal amortizacion = BigDecimal.ZERO;
-            BigDecimal cuota = BigDecimal.ZERO;
-            BigDecimal flujoEfectivo = BigDecimal.ZERO;
-            BigDecimal nuevoSaldo;
-
-            // Método Americano con manejo de períodos de gracia
-            if (esGraciaTotal) {
-                // En gracia total: no hay pagos, el interés se capitaliza
-                BigDecimal interesCapitalizado = interesPeriodo;
-                nuevoSaldo = saldoAnterior.add(interesCapitalizado);
-                flujoEfectivo = BigDecimal.ZERO;
-                amortizacion = BigDecimal.ZERO;
-                cuota = BigDecimal.ZERO;
-            } else if (esGraciaParcial) {
-                // En gracia parcial: solo se paga interés
-                flujoEfectivo = interesPeriodo;
-                amortizacion = BigDecimal.ZERO;
-                cuota = interesPeriodo;
-                nuevoSaldo = saldoAnterior;
-            } else if (i == totalPeriodos) {
-                // Último período: capital + interés
-                amortizacion = saldoAnterior;
-                cuota = amortizacion.add(interesPeriodo);
-                flujoEfectivo = cuota;
-                nuevoSaldo = BigDecimal.ZERO;
+            if (i == totalPeriodos) {
+                // ÚLTIMO PERÍODO: Cupón + Valor Nominal completo
+                amortizacion = valorNominal;
+                flujoTotal = cuponPeriodo.add(amortizacion);
+                saldoRestante = BigDecimal.ZERO;
             } else {
-                // Períodos normales: solo interés
+                // PERÍODOS INTERMEDIOS: Solo cupón
                 amortizacion = BigDecimal.ZERO;
-                cuota = interesPeriodo;
-                flujoEfectivo = cuota;
-                nuevoSaldo = saldoAnterior;
+                flujoTotal = cuponPeriodo;
+                saldoRestante = valorNominal;
             }
 
-            flujo.setCuota(cuota);
-            flujo.setCupon(interesPeriodo);
+            // Asignar valores al flujo
+            flujo.setCupon(cuponPeriodo);
+            flujo.setInteres(cuponPeriodo);
             flujo.setAmortizacion(amortizacion);
-            flujo.setInteres(interesPeriodo);
-            flujo.setSaldoInsoluto(nuevoSaldo);
-            flujo.setSaldo(nuevoSaldo);
-            flujo.setFlujoTotal(flujoEfectivo);
-            flujo.setFlujo(flujoEfectivo);
+            flujo.setCuota(flujoTotal);
+            flujo.setFlujoTotal(flujoTotal);
+            flujo.setFlujo(flujoTotal);
+            flujo.setSaldoInsoluto(saldoRestante);
+            flujo.setSaldo(saldoRestante);
 
             flujos.add(flujo);
         }
@@ -422,13 +394,13 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
         calculo.setTasaEsperada(tasaEsperada); // Guardamos la tasa en su formato original
         calculo.setFechaCalculo(LocalDate.now());
         
-        // Calculamos la TREA (rentabilidad para el inversor)
-        BigDecimal trea = calcularTREA(bono, tasaDecimal);
-        calculo.setTrea(trea);
-        
-        // Calculamos el precio máximo que debería pagar
+        // Calculamos el precio máximo que debería pagar para obtener la tasa esperada
         BigDecimal precioMaximo = calcularPrecioMaximo(bono, tasaDecimal);
         calculo.setPrecioMaximo(precioMaximo);
+        
+        // Calculamos la TREA real basada en ese precio máximo
+        BigDecimal trea = calcularTREA(bono, precioMaximo);
+        calculo.setTrea(trea);
         
         return calculo;
     }
@@ -438,33 +410,211 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
         Bono bono = calculo.getBono();
         BigDecimal tasaEsperada = calculo.getTasaEsperada();
         
-        // Calculamos la TREA (rentabilidad para el inversor)
-        BigDecimal trea = calcularTREA(bono, tasaEsperada);
-        calculo.setTrea(trea);
+        // Asegurarse de que la tasa esté en formato decimal
+        BigDecimal tasaDecimal = tasaEsperada;
+        if (tasaEsperada.compareTo(BigDecimal.valueOf(0.1)) > 0) {
+            tasaDecimal = tasaEsperada.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
+        }
         
-        // Calculamos el precio máximo que debería pagar
-        BigDecimal precioMaximo = calcularPrecioMaximo(bono, tasaEsperada);
+        // Calculamos el precio máximo que debería pagar para obtener la tasa esperada
+        BigDecimal precioMaximo = calcularPrecioMaximo(bono, tasaDecimal);
         calculo.setPrecioMaximo(precioMaximo);
+        
+        // Calculamos la TREA real basada en ese precio máximo
+        BigDecimal trea = calcularTREA(bono, precioMaximo);
+        calculo.setTrea(trea);
         
         // Actualizamos el cálculo
         calculoRepository.save(calculo);
     }
 
     @Override
-    public BigDecimal calcularTREA(Bono bono, BigDecimal tasaEsperada) {
-        // Asegurarse de que la tasa esté en formato decimal (ej: 0.05 para 5%)
-        BigDecimal tasaDecimal = tasaEsperada;
-        if (tasaEsperada.compareTo(BigDecimal.valueOf(0.1)) > 0) {
-            tasaDecimal = tasaEsperada.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
+    public BigDecimal calcularTREA(Bono bono, BigDecimal precioCompra) {
+        // Asegurarse de que el precio de compra esté en formato correcto
+        BigDecimal precioCompraDecimal = precioCompra;
+        if (precioCompra.compareTo(BigDecimal.valueOf(100)) <= 0) {
+            // Si está en formato porcentual del valor nominal, convertir
+            precioCompraDecimal = bono.getValorNominal().multiply(precioCompra.divide(BigDecimal.valueOf(100), MC));
         }
         
-        // Genera flujos financieros si no existen
+        // Genera flujos financieros del bono
         List<FlujoFinanciero> flujos = calcularFlujoFinanciero(bono);
         
-        // Calcula la TREA basada en los flujos y la tasa esperada
-        // En un escenario real, esto debería utilizar la TIR de los flujos
-        // Para simplificar, usamos la tasa esperada como TREA
-        return tasaDecimal;
+        // Calcula la TREA como TIR de la inversión
+        return calcularTIR(flujos, precioCompraDecimal, bono);
+    }
+    
+    /**
+     * Calcula la TIR (Tasa Interna de Retorno) dado un precio de compra
+     */
+    private BigDecimal calcularTIR(List<FlujoFinanciero> flujos, BigDecimal precioCompra, Bono bono) {
+        // Para bonos simples, usar método analítico más preciso
+        if (bono.getPlazoAnios() <= 3) {
+            return calcularTIRAnalitica(precioCompra, bono);
+        }
+        
+        // Para bonos complejos, usar bisección que es más estable
+        return calcularTIRBiseccion(flujos, precioCompra, bono);
+    }
+    
+    /**
+     * Calcula TIR analíticamente para bonos simples (hasta 3 años)
+     */
+    private BigDecimal calcularTIRAnalitica(BigDecimal precioCompra, Bono bono) {
+        BigDecimal valorNominal = bono.getValorNominal(); 
+        BigDecimal tasaCupon = bono.getTasaCupon().divide(BigDecimal.valueOf(100), MC); // Convertir a decimal
+        BigDecimal cuponAnual = valorNominal.multiply(tasaCupon);
+        int plazoAnios = bono.getPlazoAnios();
+        
+        // Para 1 año: TIR = (Cupón + Valor Nominal) / Precio Compra - 1
+        if (plazoAnios == 1) {
+            BigDecimal flujoTotal = cuponAnual.add(valorNominal);
+            BigDecimal tir = flujoTotal.divide(precioCompra, MC).subtract(BigDecimal.ONE);
+            return tir.multiply(BigDecimal.valueOf(100)).setScale(2, ROUNDING_MODE);
+        }
+        
+        // Para 2 años: usar fórmula cuadrática
+        if (plazoAnios == 2) {
+            return calcularTIR2Anios(precioCompra, cuponAnual, valorNominal);
+        }
+        
+        // Para 3 años: usar bisección simplificada
+        return calcularTIRBiseccionSimple(precioCompra, cuponAnual, valorNominal, plazoAnios);
+    }
+    
+    /**
+     * Calcula TIR para bono de 2 años usando fórmula cuadrática
+     */
+    private BigDecimal calcularTIR2Anios(BigDecimal precio, BigDecimal cupon, BigDecimal valorNominal) {
+        // Ecuación: 0 = -P + C/(1+r) + (C+VN)/(1+r)²
+        // Reorganizando: P(1+r)² = C(1+r) + (C+VN)
+        // P(1+r)² - C(1+r) - (C+VN) = 0
+        // Sustituyendo x = (1+r): Px² - Cx - (C+VN) = 0
+        
+        BigDecimal a = precio;
+        BigDecimal b = cupon.negate();
+        BigDecimal c = cupon.add(valorNominal).negate();
+        
+        // Fórmula cuadrática: x = (-b ± √(b²-4ac)) / 2a
+        BigDecimal discriminante = b.pow(2).subtract(a.multiply(c).multiply(BigDecimal.valueOf(4)));
+        
+        if (discriminante.compareTo(BigDecimal.ZERO) < 0) {
+            // No hay solución real, usar bisección
+            return calcularTIRBiseccionSimple(precio, cupon, valorNominal, 2);
+        }
+        
+        BigDecimal raizDiscriminante = new BigDecimal(Math.sqrt(discriminante.doubleValue()));
+        BigDecimal x1 = b.negate().add(raizDiscriminante).divide(a.multiply(BigDecimal.valueOf(2)), MC);
+        BigDecimal x2 = b.negate().subtract(raizDiscriminante).divide(a.multiply(BigDecimal.valueOf(2)), MC);
+        
+        // Elegir la solución positiva y mayor que 1 (ya que x = 1+r)
+        BigDecimal x = (x1.compareTo(BigDecimal.ONE) > 0) ? x1 : x2;
+        BigDecimal tir = x.subtract(BigDecimal.ONE);
+        
+        return tir.multiply(BigDecimal.valueOf(100)).setScale(2, ROUNDING_MODE);
+    }
+    
+    /**
+     * Calcula TIR usando bisección simplificada
+     */
+    private BigDecimal calcularTIRBiseccionSimple(BigDecimal precio, BigDecimal cupon, BigDecimal valorNominal, int plazo) {
+        BigDecimal tirMin = new BigDecimal("-0.5"); // -50%
+        BigDecimal tirMax = new BigDecimal("2.0");   // 200%
+        BigDecimal precision = new BigDecimal("0.0001"); // 0.01%
+        int maxIteraciones = 100;
+        
+        for (int i = 0; i < maxIteraciones; i++) {
+            BigDecimal tirMedio = tirMin.add(tirMax).divide(BigDecimal.valueOf(2), MC);
+            BigDecimal van = calcularVANSimple(precio, cupon, valorNominal, plazo, tirMedio);
+            
+            if (van.abs().compareTo(precision) < 0) {
+                return tirMedio.multiply(BigDecimal.valueOf(100)).setScale(2, ROUNDING_MODE);
+            }
+            
+            if (van.compareTo(BigDecimal.ZERO) > 0) {
+                tirMin = tirMedio;
+            } else {
+                tirMax = tirMedio;
+            }
+        }
+        
+        // Si no converge, devolver el punto medio
+        BigDecimal tirFinal = tirMin.add(tirMax).divide(BigDecimal.valueOf(2), MC);
+        return tirFinal.multiply(BigDecimal.valueOf(100)).setScale(2, ROUNDING_MODE);
+    }
+    
+    /**
+     * Calcula TIR usando bisección para bonos complejos
+     */
+    private BigDecimal calcularTIRBiseccion(List<FlujoFinanciero> flujos, BigDecimal precioCompra, Bono bono) {
+        BigDecimal tirMin = new BigDecimal("-0.5"); // -50%
+        BigDecimal tirMax = new BigDecimal("2.0");   // 200%
+        BigDecimal precision = new BigDecimal("0.0001"); // 0.01%
+        int maxIteraciones = 100;
+        
+        for (int i = 0; i < maxIteraciones; i++) {
+            BigDecimal tirMedio = tirMin.add(tirMax).divide(BigDecimal.valueOf(2), MC);
+            BigDecimal van = calcularVANParaBiseccion(flujos, precioCompra, tirMedio, bono);
+            
+            if (van.abs().compareTo(precision) < 0) {
+                return tirMedio.multiply(BigDecimal.valueOf(100)).setScale(2, ROUNDING_MODE);
+            }
+            
+            if (van.compareTo(BigDecimal.ZERO) > 0) {
+                tirMin = tirMedio;
+            } else {
+                tirMax = tirMedio;
+            }
+        }
+        
+        // Si no converge, devolver el punto medio
+        BigDecimal tirFinal = tirMin.add(tirMax).divide(BigDecimal.valueOf(2), MC);
+        return tirFinal.multiply(BigDecimal.valueOf(100)).setScale(2, ROUNDING_MODE);
+    }
+    
+    /**
+     * Calcula VAN simple para bonos regulares
+     */
+    private BigDecimal calcularVANSimple(BigDecimal precio, BigDecimal cupon, BigDecimal valorNominal, int plazo, BigDecimal tir) {
+        BigDecimal van = precio.negate(); // Inversión inicial negativa
+        BigDecimal unMasTir = BigDecimal.ONE.add(tir);
+        
+        // Sumar cupones descontados
+        for (int t = 1; t <= plazo; t++) {
+            BigDecimal factorDescuento = unMasTir.pow(t, MC);
+            if (t == plazo) {
+                // Último período: cupón + valor nominal
+                BigDecimal flujoFinal = cupon.add(valorNominal);
+                van = van.add(flujoFinal.divide(factorDescuento, MC));
+            } else {
+                // Períodos intermedios: solo cupón
+                van = van.add(cupon.divide(factorDescuento, MC));
+            }
+        }
+        
+        return van;
+    }
+    
+    /**
+     * Calcula VAN para bisección con flujos complejos
+     */
+    private BigDecimal calcularVANParaBiseccion(List<FlujoFinanciero> flujos, BigDecimal precioCompra, BigDecimal tir, Bono bono) {
+        BigDecimal van = precioCompra.negate(); // Inversión inicial negativa
+        BigDecimal unMasTir = BigDecimal.ONE.add(tir);
+        
+        // Sumar flujos futuros descontados (saltar el período 0)
+        for (int i = 1; i < flujos.size(); i++) {
+            FlujoFinanciero flujo = flujos.get(i);
+            BigDecimal flujoValor = flujo.getFlujoTotal();
+            
+            if (flujoValor != null && flujoValor.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal factorDescuento = unMasTir.pow(flujo.getPeriodo(), MC);
+                BigDecimal valorPresente = flujoValor.divide(factorDescuento, MC);
+                van = van.add(valorPresente);
+            }
+        }
+        
+        return van;
     }
 
     @Override
