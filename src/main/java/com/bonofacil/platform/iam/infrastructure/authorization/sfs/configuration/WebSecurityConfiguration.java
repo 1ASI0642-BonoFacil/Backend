@@ -88,7 +88,8 @@ public class WebSecurityConfiguration {
                 .sessionManagement(customizer -> customizer.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorizeRequests -> authorizeRequests
                         .requestMatchers(
-                                "/api/v1/authentication/**",
+                                "/api/v1/authentication/sign-in",
+                                "/api/v1/authentication/sign-up",
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
@@ -99,6 +100,7 @@ public class WebSecurityConfiguration {
                                 "/webjars/**",
                                 "/error",
                                 "/actuator/**").permitAll()
+                        .requestMatchers("/api/v1/authentication/me").authenticated() // Cualquier usuario autenticado puede acceder
                         .requestMatchers("/api/v1/roles/**").hasRole("ADMIN")     // Solo ADMIN puede acceder
                         .requestMatchers("/api/v1/users/**").hasRole("ADMIN")     // Solo ADMIN puede acceder
                         .requestMatchers("/api/v1/emisor/**").hasAnyRole("EMISOR", "ADMIN") // EMISOR y ADMIN pueden acceder
