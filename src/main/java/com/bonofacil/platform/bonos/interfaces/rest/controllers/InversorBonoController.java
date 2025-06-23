@@ -109,10 +109,8 @@ public class InversorBonoController {
         Bono bono = bonoService.obtenerBonoPorId(resource.getBonoId())
                 .orElseThrow(() -> new IllegalArgumentException("Bono no encontrado"));
         
-        // Convertir tasaEsperada a BigDecimal
-        BigDecimal tasaEsperada = BigDecimal.valueOf(resource.getTasaEsperada()).divide(BigDecimal.valueOf(100));
-        
-        Calculo calculo = calculoFinancieroService.calcularInversion(bono, tasaEsperada);
+        // Calcular inversión directamente con la tasa en porcentaje
+        Calculo calculo = calculoFinancieroService.calcularInversion(bono, resource.getTasaEsperada());
         calculo.setInversorUsername(username);
         
         Calculo calculoGuardado = calculoService.guardarCalculo(calculo);

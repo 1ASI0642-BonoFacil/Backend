@@ -3,6 +3,7 @@ package com.bonofacil.platform.bonos.interfaces.rest.resources;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @Getter
@@ -12,9 +13,9 @@ public class CalculoResource {
     private Long bonoId;
     private String bonoNombre;
     private String inversorUsername;
-    private double tasaEsperada;
-    private double trea;
-    private double precioMaximo;
+    private BigDecimal tasaEsperada;
+    private BigDecimal trea;
+    private BigDecimal precioMaximo;
     private LocalDate fechaCalculo;
     private String informacionAdicional;
 }

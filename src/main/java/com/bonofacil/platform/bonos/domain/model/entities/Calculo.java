@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import jakarta.persistence.*;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @Getter
@@ -26,9 +27,15 @@ public class Calculo extends AuditableModel {
     
     private String inversorUsername;
     
-    private double tasaEsperada;
-    private double trea;
-    private double precioMaximo;
+    @Column(precision = 19, scale = 6)
+    private BigDecimal tasaEsperada;
+    
+    @Column(precision = 19, scale = 6)
+    private BigDecimal trea;
+    
+    @Column(precision = 19, scale = 4)
+    private BigDecimal precioMaximo;
+    
     private LocalDate fechaCalculo;
     
     // Información adicional sobre el cálculo (como tipo de valoración)
@@ -41,5 +48,32 @@ public class Calculo extends AuditableModel {
     
     public String getBonoNombre() {
         return bono != null ? bono.getNombre() : null;
+    }
+    
+    /**
+     * Métodos de utilidad para convertir entre BigDecimal y double
+     */
+    public double getTasaEsperadaAsDouble() {
+        return tasaEsperada != null ? tasaEsperada.doubleValue() : 0.0;
+    }
+    
+    public double getTreaAsDouble() {
+        return trea != null ? trea.doubleValue() : 0.0;
+    }
+    
+    public double getPrecioMaximoAsDouble() {
+        return precioMaximo != null ? precioMaximo.doubleValue() : 0.0;
+    }
+    
+    public void setTasaEsperadaFromDouble(double value) {
+        this.tasaEsperada = BigDecimal.valueOf(value);
+    }
+    
+    public void setTreaFromDouble(double value) {
+        this.trea = BigDecimal.valueOf(value);
+    }
+    
+    public void setPrecioMaximoFromDouble(double value) {
+        this.precioMaximo = BigDecimal.valueOf(value);
     }
 }

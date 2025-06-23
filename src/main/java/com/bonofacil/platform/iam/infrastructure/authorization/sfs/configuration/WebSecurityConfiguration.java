@@ -90,13 +90,19 @@ public class WebSecurityConfiguration {
                         .requestMatchers(
                                 "/api/v1/authentication/**",
                                 "/v3/api-docs/**",
-                                "/swagger-ui.html",
                                 "/swagger-ui/**",
+                                "/swagger-ui.html",
                                 "/swagger-resources/**",
-                                "/webjars/**").permitAll()
+                                "/swagger-resources",
+                                "/configuration/ui",
+                                "/configuration/security",
+                                "/webjars/**",
+                                "/error",
+                                "/actuator/**").permitAll()
                         .requestMatchers("/api/v1/roles/**").hasRole("ADMIN")     // Solo ADMIN puede acceder
-                        .requestMatchers("/api/v1/users/**").hasRole("ADMIN")     // Solo COOK puede acceder
-                        //.requestMatchers("/api/v1/user/**").hasAnyRole("USER", "ADMIN") // USER y ADMIN pueden acceder
+                        .requestMatchers("/api/v1/users/**").hasRole("ADMIN")     // Solo ADMIN puede acceder
+                        .requestMatchers("/api/v1/emisor/**").hasAnyRole("EMISOR", "ADMIN") // EMISOR y ADMIN pueden acceder
+                        .requestMatchers("/api/v1/inversor/**").hasAnyRole("INVERSOR", "ADMIN") // INVERSOR y ADMIN pueden acceder
                         .anyRequest().authenticated()
                 );
         http.authenticationProvider(authenticationProvider());

@@ -7,6 +7,7 @@ import com.bonofacil.platform.bonos.infrastructure.persistence.jpa.repositories.
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
@@ -43,8 +44,16 @@ public class BonoService {
         return bonoRepository.findByMoneda(moneda);
     }
 
-    public List<Bono> obtenerBonosPorRangoTasa(double tasaMinima, Double tasaMaxima) {
-        return bonoRepository.findByTasaCuponBetween(tasaMinima, tasaMaxima);
+    public List<Bono> obtenerBonosPorRangoTasa(double tasaMinima, double tasaMaxima) {
+        BigDecimal minTasa = BigDecimal.valueOf(tasaMinima);
+        
+        if (tasaMaxima == Double.MAX_VALUE) {
+            // Si no se especificó tasa máxima, buscar bonos con tasa mayor o igual a la mínima
+            return bonoRepository.findByTasaCuponGreaterThanEqual(minTasa);
+        } else {
+            BigDecimal maxTasa = BigDecimal.valueOf(tasaMaxima);
+            return bonoRepository.findByTasaCuponBetween(minTasa, maxTasa);
+        }
     }
 
     public Bono actualizarBono(Long id, Bono bono) {
@@ -63,6 +72,25 @@ public class BonoService {
 
     public void validarBono(Bono bono) {
         // Implementación básica
+        if (bono.getValorNominal() == null || bono.getValorNominal().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("El valor nominal debe ser positivo");
+        }
+        
+        if (bono.getTasaCupon() == null) {
+            throw new IllegalArgumentException("La tasa cupón no puede ser nula");
+        }
+        
+        if (bono.getPlazoAnios() <= 0) {
+            throw new IllegalArgumentException("El plazo en años debe ser positivo");
+        }
+        
+        if (bono.getFrecuenciaPagos() <= 0) {
+            throw new IllegalArgumentException("La frecuencia de pagos debe ser positiva");
+        }
+        
+        if (bono.getFechaEmision() == null) {
+            throw new IllegalArgumentException("La fecha de emisión no puede ser nula");
+        }
     }
 
     public List<FlujoFinanciero> obtenerFlujoFinancieroBono(Long id) {

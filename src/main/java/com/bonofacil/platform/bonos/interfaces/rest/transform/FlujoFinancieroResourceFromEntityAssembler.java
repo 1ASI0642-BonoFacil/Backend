@@ -10,14 +10,17 @@ public class FlujoFinancieroResourceFromEntityAssembler {
         resource.setId(entity.getId());
         resource.setPeriodo(entity.getPeriodo());
         resource.setFecha(entity.getFecha());
-        resource.setCuota(entity.getCuota());
+        
+        // Ajustamos campos para coincidir con la entidad
+        resource.setCuota(entity.getFlujoTotal());
         resource.setAmortizacion(entity.getAmortizacion());
-        resource.setInteres(entity.getInteres());
-        resource.setSaldo(entity.getSaldo());
-        resource.setFlujo(entity.getFlujo());
+        resource.setInteres(entity.getCupon());
+        resource.setSaldo(entity.getSaldoInsoluto());
+        resource.setFlujo(entity.getFlujoTotal());
         resource.setFactorDescuento(entity.getFactorDescuento());
-        resource.setValorActual(entity.getValorActual());
+        resource.setValorActual(entity.getValorPresente());
         resource.setFactorTiempo(entity.getFactorTiempo());
+        
         return resource;
     }
 }

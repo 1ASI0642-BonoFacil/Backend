@@ -41,7 +41,13 @@ public interface CalculoFinancieroService {
 
     BigDecimal calcularPrecioMaximo(List<FlujoFinanciero> flujos, BigDecimal trea);
 
+    // Calcula la inversión para un bono con una tasa esperada
     Calculo calcularInversion(Bono bono, BigDecimal tasaEsperada);
+    
+    // Sobrecarga que acepta tasaEsperada como double
+    default Calculo calcularInversion(Bono bono, double tasaEsperada) {
+        return calcularInversion(bono, BigDecimal.valueOf(tasaEsperada).divide(BigDecimal.valueOf(100)));
+    }
     
     // Convierte una tasa nominal a efectiva
     BigDecimal convertirTasaNominalAEfectiva(BigDecimal tn, int capitalizaciones, int periodoTotal);

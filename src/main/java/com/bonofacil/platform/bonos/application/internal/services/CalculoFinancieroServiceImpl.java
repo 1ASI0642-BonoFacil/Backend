@@ -31,8 +31,8 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
 
     @Override
     public List<FlujoFinanciero> calcularFlujoFinanciero(Bono bono) {
-        BigDecimal valorNominal = BigDecimal.valueOf(bono.getValorNominal());
-        BigDecimal tasaCupon = BigDecimal.valueOf(bono.getTasaCupon()).divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
+        BigDecimal valorNominal = bono.getValorNominal();
+        BigDecimal tasaCupon = bono.getTasaCupon().divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         int plazoAnios = bono.getPlazoAnios();
         int frecuenciaPagos = bono.getFrecuenciaPagos();
         int totalPeriodos = plazoAnios * frecuenciaPagos;
@@ -50,10 +50,12 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
         flujoInicial.setBono(bono);
         flujoInicial.setPeriodo(0);
         flujoInicial.setFecha(fechaEmision);
-        flujoInicial.setCuota(BigDecimal.ZERO);
+        flujoInicial.setCupon(BigDecimal.ZERO);
         flujoInicial.setAmortizacion(BigDecimal.ZERO);
         flujoInicial.setInteres(BigDecimal.ZERO);
+        flujoInicial.setSaldoInsoluto(valorNominal);
         flujoInicial.setSaldo(valorNominal);
+        flujoInicial.setFlujoTotal(valorNominal.negate());
         flujoInicial.setFlujo(valorNominal.negate());
         flujos.add(flujoInicial);
 
@@ -75,7 +77,10 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
             boolean esGraciaParcial = i > plazosGraciaTotal && i <= (plazosGraciaTotal + plazosGraciaParcial);
             
             // Obtener saldo del periodo anterior
-            BigDecimal saldoAnterior = flujos.get(i - 1).getSaldo();
+            BigDecimal saldoAnterior = flujos.get(i - 1).getSaldoInsoluto();
+            if (saldoAnterior == null) {
+                saldoAnterior = flujos.get(i - 1).getSaldo();
+            }
 
             // Interés del periodo basado en el saldo anterior
             BigDecimal interesPeriodo = saldoAnterior.multiply(tasaPeriodica, MC);
@@ -114,9 +119,12 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
             }
 
             flujo.setCuota(cuota);
+            flujo.setCupon(interesPeriodo);
             flujo.setAmortizacion(amortizacion);
             flujo.setInteres(interesPeriodo);
+            flujo.setSaldoInsoluto(nuevoSaldo);
             flujo.setSaldo(nuevoSaldo);
+            flujo.setFlujoTotal(flujoEfectivo);
             flujo.setFlujo(flujoEfectivo);
 
             flujos.add(flujo);
@@ -127,7 +135,7 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
 
     @Override
     public BigDecimal calcularTCEA(Bono bono) {
-        BigDecimal tasaCupon = BigDecimal.valueOf(bono.getTasaCupon()).divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
+        BigDecimal tasaCupon = bono.getTasaCupon().divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         int frecuenciaPagos = bono.getFrecuenciaPagos();
         
         // Fórmula: (1 + j/m)^m - 1
@@ -152,11 +160,11 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
             throw new IllegalArgumentException("La frecuencia de pagos debe ser un valor positivo");
         }
         
-        // Fórmula correcta: TEP = (1 + TEA)^(1/m) - 1
+        // Calculamos la tasa periódica usando logaritmos y exponenciales para mayor precisión
         double tasaAnualDouble = tasaAnualDecimal.doubleValue();
         double tasaPeriodicaDouble = Math.pow(1.0 + tasaAnualDouble, 1.0/frecuenciaPagos) - 1.0;
         
-        return BigDecimal.valueOf(tasaPeriodicaDouble).setScale(SCALE, ROUNDING_MODE);
+        return new BigDecimal(tasaPeriodicaDouble).setScale(SCALE, ROUNDING_MODE);
     }
     
     @Override
@@ -186,449 +194,437 @@ public class CalculoFinancieroServiceImpl implements CalculoFinancieroService {
             FlujoFinanciero flujo = flujos.get(i);
             
             // Solo considerar flujos positivos reales
-            if (flujo.getFlujo().compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal flujoValor = flujo.getFlujoTotal();
+            if (flujoValor == null) {
+                flujoValor = flujo.getFlujo();
+            }
+            
+            if (flujoValor.compareTo(BigDecimal.ZERO) > 0) {
                 // Usar el periodo exacto
-                BigDecimal factorTiempo = BigDecimal.valueOf(flujo.getPeriodo());
+                BigDecimal factorTiempo = new BigDecimal(flujo.getPeriodo());
+                flujo.setFactorTiempo(factorTiempo);
                 
                 // Factor de descuento: 1/(1+tasaPeriodica)^periodo
                 BigDecimal factorDescuento = BigDecimal.ONE
                         .divide(BigDecimal.ONE.add(tasaPeriodica, MC).pow(flujo.getPeriodo(), MC), SCALE, ROUNDING_MODE);
+                flujo.setFactorDescuento(factorDescuento);
                 
-                BigDecimal valorActual = flujo.getFlujo().multiply(factorDescuento, MC);
+                BigDecimal valorActual = flujoValor.multiply(factorDescuento, MC);
+                flujo.setValorActual(valorActual);
+                flujo.setValorPresente(valorActual);
                 
                 // Acumular para el cálculo de duración: t * VA(flujo)
                 sumaPonderada = sumaPonderada.add(factorTiempo.multiply(valorActual, MC), MC);
+                
+                // Acumular el precio total (suma de valores actuales)
                 precio = precio.add(valorActual, MC);
             }
         }
         
-        // Evitar división por cero
-        if (precio.compareTo(BigDecimal.ZERO) == 0) {
-            return BigDecimal.ZERO;
+        // Duracion = Suma(t * VA(flujo)) / Precio
+        if (precio.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal duracion = sumaPonderada.divide(precio, SCALE, ROUNDING_MODE);
+            
+            // Convertir duracion a años si está en periodos
+            BigDecimal duracionAnios = duracion.divide(BigDecimal.valueOf(frecuenciaPagos), SCALE, ROUNDING_MODE);
+            
+            return duracionAnios;
         }
         
-        // Duración en periodos: Σ(t * VA(flujo)) / Precio
-        BigDecimal duracionPeriodos = sumaPonderada.divide(precio, SCALE, ROUNDING_MODE);
-        
-        // Convertir duración de periodos a años: D_periodos / frecuencia_pagos
-        BigDecimal duracionAnios = duracionPeriodos.divide(BigDecimal.valueOf(frecuenciaPagos), SCALE, ROUNDING_MODE);
-        
-        return duracionAnios.setScale(4, ROUNDING_MODE);
+        return BigDecimal.ZERO;
     }
     
     @Override
     public BigDecimal calcularDuracion(Bono bono) {
-        BigDecimal tcea = BigDecimal.valueOf(bono.getTcea());
-        List<FlujoFinanciero> flujos = bono.getFlujos();
-        if (flujos == null || flujos.isEmpty()) {
-            flujos = calcularFlujoFinanciero(bono);
-        }
-        return calcularDuracion(flujos, tcea);
+        List<FlujoFinanciero> flujos = calcularFlujoFinanciero(bono);
+        return calcularDuracion(flujos, bono.getTasaCupon());
     }
 
     @Override
     public BigDecimal calcularConvexidad(List<FlujoFinanciero> flujos, BigDecimal tcea) {
-        // Validaciones iniciales
-        if (flujos == null || flujos.size() <= 1) {
-            return BigDecimal.ZERO;
-        }
+        BigDecimal sumaConvexidad = BigDecimal.ZERO;
+        BigDecimal precio = BigDecimal.ZERO;
         
-        // Obtener información relevante del bono
-        Bono bono = null;
-        if (!flujos.isEmpty() && flujos.get(0).getBono() != null) {
-            bono = flujos.get(0).getBono();
-        }
-        
-        int frecuenciaPagos = (bono != null) ? bono.getFrecuenciaPagos() : 2;
-        
-        // Asegurarse que la tasa esté en formato decimal
+        // Convertir TCEA a decimal si viene en porcentaje
         BigDecimal tceaDecimal = tcea;
         if (tcea.compareTo(BigDecimal.valueOf(0.1)) > 0) {
             tceaDecimal = tcea.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         }
         
-        // Calcular la tasa periódica
-        BigDecimal tasaPeriodica = calcularTasaEfectivaPeriodica(tceaDecimal, frecuenciaPagos);
-        
-        // Obtener precio del bono como suma de flujos descontados
-        BigDecimal precioBono = BigDecimal.ZERO;
-        for (int i = 1; i < flujos.size(); i++) {
-            FlujoFinanciero ff = flujos.get(i);
-            BigDecimal flujo = ff.getFlujo();
-            if (flujo != null && flujo.compareTo(BigDecimal.ZERO) > 0) {
-                BigDecimal factorDescuento = BigDecimal.ONE
-                        .divide(BigDecimal.ONE.add(tasaPeriodica, MC).pow(i, MC), SCALE, ROUNDING_MODE);
-                BigDecimal flujoDescontado = flujo.multiply(factorDescuento, MC);
-                precioBono = precioBono.add(flujoDescontado, MC);
-            }
-        }
-        
-        // Si el precio es cero o cercano a cero, no podemos calcular la convexidad
-        if (precioBono.compareTo(BigDecimal.valueOf(0.0001)) < 0) {
-            return BigDecimal.valueOf(1); // Valor por defecto
-        }
-        
-        // Calcular la convexidad usando la fórmula estándar
-        // Convexidad = (1/P) * Σ[ (t*(t+1)*Ct) / ((1+r)^(t+2)) ]
-        BigDecimal numerador = BigDecimal.ZERO;
-        
-        for (int i = 1; i < flujos.size(); i++) {
-            FlujoFinanciero ff = flujos.get(i);
-            BigDecimal flujo = ff.getFlujo();
-            
-            if (flujo != null && flujo.compareTo(BigDecimal.ZERO) > 0) {
-                // Factor t*(t+1) para el flujo en el periodo t
-                BigDecimal t = BigDecimal.valueOf(i);
-                BigDecimal tPlusOne = BigDecimal.valueOf(i + 1);
-                BigDecimal factorTiempo = t.multiply(tPlusOne, MC);
-                
-                // Factor de descuento = (1+r)^(t+2)
-                BigDecimal factorDescuento = BigDecimal.ONE
-                        .add(tasaPeriodica, MC)
-                        .pow(i + 2, MC);
-                
-                // Flujo ponderado por tiempo y descontado
-                BigDecimal termino = flujo
-                        .multiply(factorTiempo, MC)
-                        .divide(factorDescuento, SCALE, ROUNDING_MODE);
-                
-                numerador = numerador.add(termino, MC);
-            }
-        }
-        
-        // Ajuste para frecuencia: convexidad en años = convexidad en períodos / m^2
-        BigDecimal convexidadPeriodos = numerador.divide(precioBono, SCALE, ROUNDING_MODE);
-        BigDecimal convexidadAnual = convexidadPeriodos
-                .divide(BigDecimal.valueOf(frecuenciaPagos * frecuenciaPagos), SCALE, ROUNDING_MODE);
-        
-        return convexidadAnual.setScale(2, ROUNDING_MODE);
-    }
-    
-    @Override
-    public BigDecimal calcularConvexidad(Bono bono) {
-        List<FlujoFinanciero> flujos = bono.getFlujos();
-        if (flujos == null || flujos.isEmpty()) {
-            flujos = calcularFlujoFinanciero(bono);
-        }
-        BigDecimal tcea = BigDecimal.valueOf(bono.getTcea());
-        return calcularConvexidad(flujos, tcea);
-    }
-
-    @Override
-    public BigDecimal calcularPrecioMaximo(List<FlujoFinanciero> flujos, BigDecimal trea) {
-        // Verificar si hay al menos un flujo después del periodo 0
-        if (flujos.size() <= 1) {
-            return BigDecimal.valueOf(0);
-        }
-        
-        // Convertir TREA a formato decimal
-        BigDecimal treaDecimal = trea;
-        if (trea.compareTo(BigDecimal.valueOf(0.1)) > 0) {
-            treaDecimal = trea.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
-        }
-        
-        // Obtener información del bono
+        // Obtener información del bono para calcular correctamente
         Bono bono = null;
         if (!flujos.isEmpty() && flujos.get(0).getBono() != null) {
             bono = flujos.get(0).getBono();
         }
         
-        // Obtener datos relevantes del bono
-        BigDecimal valorNominal = flujos.get(0).getSaldo();
         int frecuenciaPagos = (bono != null) ? bono.getFrecuenciaPagos() : 2;
         
-        // Calcular tasa periódica para descuento correctamente
-        BigDecimal tasaPeriodica = calcularTasaEfectivaPeriodica(treaDecimal, frecuenciaPagos);
+        // Calcular tasa periódica para descuento
+        BigDecimal tasaPeriodica = calcularTasaEfectivaPeriodica(tceaDecimal, frecuenciaPagos);
         
-        // Cálculo del precio como suma de flujos descontados
-        BigDecimal precioMaximo = BigDecimal.ZERO;
-        
-        // Procesar cada flujo existente
+        // Saltar el periodo 0 (desembolso inicial)
         for (int i = 1; i < flujos.size(); i++) {
             FlujoFinanciero ff = flujos.get(i);
-            BigDecimal flujo = ff.getFlujo();
             
-            // Solo calcular VP si hay flujo positivo
-            if (flujo != null && flujo.compareTo(BigDecimal.ZERO) > 0) {
+            // Solo considerar flujos positivos reales
+            BigDecimal flujoValor = ff.getFlujoTotal();
+            if (flujoValor == null) {
+                flujoValor = ff.getFlujo();
+            }
+            
+            if (flujoValor.compareTo(BigDecimal.ZERO) > 0) {
+                // Usar el periodo exacto
+                int periodo = ff.getPeriodo();
+                BigDecimal t = new BigDecimal(periodo);
+                BigDecimal tMasUno = t.add(BigDecimal.ONE);
+                
                 // Factor de descuento: 1/(1+tasaPeriodica)^periodo
                 BigDecimal factorDescuento = BigDecimal.ONE
-                        .divide(BigDecimal.ONE.add(tasaPeriodica, MC).pow(i, MC), SCALE, ROUNDING_MODE);
+                        .divide(BigDecimal.ONE.add(tasaPeriodica, MC).pow(periodo, MC), SCALE, ROUNDING_MODE);
                 
-                // Valor presente del flujo
-                BigDecimal flujoDescontado = flujo.multiply(factorDescuento, MC);
-                precioMaximo = precioMaximo.add(flujoDescontado, MC);
+                BigDecimal valorActual = flujoValor.multiply(factorDescuento, MC);
+                
+                // Fórmula de convexidad: t * (t + 1) * VA(flujo) / (1 + r)^2
+                BigDecimal contribucionConvexidad = t.multiply(tMasUno, MC)
+                        .multiply(valorActual, MC);
+                
+                sumaConvexidad = sumaConvexidad.add(contribucionConvexidad, MC);
+                
+                // Acumular el precio total (suma de valores actuales)
+                precio = precio.add(valorActual, MC);
             }
         }
         
+        // Convexidad = Suma(t * (t+1) * VA(flujo)) / (Precio * (1+r)^2)
+        if (precio.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal divisor = precio.multiply(
+                BigDecimal.ONE.add(tasaPeriodica).pow(2, MC), MC
+            );
+            
+            BigDecimal convexidad = sumaConvexidad.divide(divisor, SCALE, ROUNDING_MODE);
+            
+            // Normalizamos para convertir de periodos a años
+            BigDecimal m = new BigDecimal(frecuenciaPagos);
+            BigDecimal convexidadAnual = convexidad.divide(m.pow(2), SCALE, ROUNDING_MODE);
+            
+            return convexidadAnual;
+        }
+        
+        return BigDecimal.ZERO;
+    }
+    
+    @Override
+    public BigDecimal calcularConvexidad(Bono bono) {
+        List<FlujoFinanciero> flujos = calcularFlujoFinanciero(bono);
+        return calcularConvexidad(flujos, bono.getTasaCupon());
+    }
+
+    @Override
+    public BigDecimal calcularPrecioMaximo(List<FlujoFinanciero> flujos, BigDecimal trea) {
+        // Asegurarse de que la tasa esté en formato decimal (ej: 0.05 para 5%)
+        BigDecimal tasaDecimal = trea;
+        if (trea.compareTo(BigDecimal.valueOf(0.1)) > 0) {
+            tasaDecimal = trea.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
+        }
+        
+        if (flujos == null || flujos.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        
+        // Obtener la información del bono para determinar la frecuencia de pagos
+        Bono bono = flujos.get(0).getBono();
+        int frecuenciaPagos = (bono != null) ? bono.getFrecuenciaPagos() : 2;
+        
+        // Calcular la tasa periódica
+        BigDecimal tasaPeriodica = calcularTasaEfectivaPeriodica(tasaDecimal, frecuenciaPagos);
+        
+        BigDecimal precioMaximo = BigDecimal.ZERO;
+        
+        // Calcular el valor presente de todos los flujos futuros usando la tasa esperada
+        // Saltar el flujo inicial (período 0) que es el desembolso
+        for (int i = 1; i < flujos.size(); i++) {
+            FlujoFinanciero flujo = flujos.get(i);
+            
+            // Obtener el flujo total
+            BigDecimal flujoValor = flujo.getFlujoTotal();
+            if (flujoValor == null || flujoValor.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            
+            // Calcular el factor de descuento: 1 / (1 + r)^n
+            BigDecimal factorDescuento = BigDecimal.ONE
+                    .divide(BigDecimal.ONE.add(tasaPeriodica).pow(flujo.getPeriodo(), MC), SCALE, ROUNDING_MODE);
+            
+            // Calcular el valor presente de este flujo
+            BigDecimal valorPresente = flujoValor.multiply(factorDescuento, MC);
+            
+            // Acumular al precio máximo
+            precioMaximo = precioMaximo.add(valorPresente);
+        }
+        
+        // Redondear a 2 decimales para mostrar como precio
         return precioMaximo.setScale(2, ROUNDING_MODE);
     }
     
     @Override
-    public BigDecimal calcularPrecioMaximo(Bono bono, BigDecimal trea) {
-        List<FlujoFinanciero> flujos = bono.getFlujos();
-        if (flujos == null || flujos.isEmpty()) {
-            flujos = calcularFlujoFinanciero(bono);
-        }
-        return calcularPrecioMaximo(flujos, trea);
+    public BigDecimal calcularPrecioMaximo(Bono bono, BigDecimal tasaEsperada) {
+        List<FlujoFinanciero> flujos = calcularFlujoFinanciero(bono);
+        return calcularPrecioMaximo(flujos, tasaEsperada);
     }
 
-    /**
-     * Documenta si el bono usa un método americano puro o una variante con períodos de gracia
-     * @param bono El bono a evaluar
-     * @return Una cadena que describe el método de amortización real
-     */
     @Override
     public String identificarMetodoAmortizacion(Bono bono) {
-        if (bono == null) {
-            return "DESCONOCIDO";
+        String metodoExplicito = bono.getMetodoAmortizacion();
+        
+        if (metodoExplicito != null && !metodoExplicito.isEmpty()) {
+            return metodoExplicito;
         }
         
-        String metodo = bono.getMetodoAmortizacion();
-        if (metodo == null || metodo.isEmpty()) {
-            return "DESCONOCIDO";
-        }
-        
-        // Verificar si es un método americano puro o una variante
-        if ("AMERICANO".equalsIgnoreCase(metodo)) {
-            if (bono.getPlazosGraciaTotal() > 0 || bono.getPlazosGraciaParcial() > 0) {
-                return "AMERICANO_CON_GRACIA";
-            } else {
-                return "AMERICANO_PURO";
-            }
-        }
-        
-        return metodo.toUpperCase();
+        // Por defecto, asumimos método americano (solo amortización al final)
+        return "AMERICANO";
     }
 
     @Override
     public void procesarCalculosBono(Bono bono) {
-        // Validar el bono
-        if (bono == null) {
-            throw new IllegalArgumentException("El bono no puede ser nulo");
-        }
-        
-        // Calcular TCEA según el método de amortización
+        // 1. Calculamos el TCEA
         BigDecimal tcea = calcularTCEA(bono);
-        bono.setTcea(tcea.doubleValue());
+        bono.setTcea(tcea);
         
-        // Calcular Flujo Financiero
+        // 2. Generamos flujos financieros
         List<FlujoFinanciero> flujos = calcularFlujoFinanciero(bono);
         
-        // Guardar los flujos en el bono
-        if (bono.getFlujos() == null) {
-            bono.setFlujos(new ArrayList<>());
-        } else {
-            bono.getFlujos().clear();
-        }
-        bono.getFlujos().addAll(flujos);
+        // 3. Calculamos duración y convexidad
+        BigDecimal duracion = calcularDuracion(flujos, bono.getTasaCupon());
+        BigDecimal convexidad = calcularConvexidad(flujos, bono.getTasaCupon());
         
-        // Calcular la Duración de Macaulay
-        BigDecimal duracion = calcularDuracion(flujos, tcea);
-        bono.setDuracion(duracion.doubleValue());
+        bono.setDuracion(duracion);
+        bono.setConvexidad(convexidad);
         
-        // Calcular la Convexidad
-        BigDecimal convexidad = calcularConvexidad(flujos, tcea);
-        bono.setConvexidad(convexidad.doubleValue());
+        // 4. Calculamos el precio máximo usando una tasa de mercado por defecto
+        // Por ejemplo, podríamos usar TCEA + 1% como tasa de mercado para inversores
+        BigDecimal tasaMercado = tcea.add(new BigDecimal("0.01"));
+        BigDecimal precioMaximo = calcularPrecioMaximo(flujos, tasaMercado);
+        
+        // 5. Guardamos la tasa de descuento utilizada
+        bono.setTasaDescuento(tasaMercado);
     }
 
     @Override
     public Calculo calcularInversion(Bono bono, BigDecimal tasaEsperada) {
-        // Validar el bono
-        if (bono == null) {
-            throw new IllegalArgumentException("El bono no puede ser nulo");
-        }
-        
-        // Verificar que haya flujos disponibles o calcularlos
-        List<FlujoFinanciero> flujos = bono.getFlujos();
-        if (flujos == null || flujos.isEmpty()) {
-            flujos = calcularFlujoFinanciero(bono);
-        }
-        
-        // Asegurar que la tasa esperada esté en formato decimal
-        BigDecimal tasaEsperadaDecimal = tasaEsperada;
+        // Asegurarse de que la tasa esté en formato decimal (ej: 0.05 para 5%)
+        BigDecimal tasaDecimal = tasaEsperada;
         if (tasaEsperada.compareTo(BigDecimal.valueOf(0.1)) > 0) {
-            tasaEsperadaDecimal = tasaEsperada.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
+            tasaDecimal = tasaEsperada.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         }
         
-        // Calcular TREA igual a tasa esperada
-        BigDecimal trea = tasaEsperadaDecimal;
-        
-        // Calcular precio máximo con la tasa esperada
-        BigDecimal precioMaximo = calcularPrecioMaximo(flujos, trea);
-        
-        // Crear el objeto de cálculo
         Calculo calculo = new Calculo();
         calculo.setBono(bono);
-        calculo.setTasaEsperada(tasaEsperadaDecimal.doubleValue());
-        calculo.setTrea(trea.doubleValue());
-        calculo.setPrecioMaximo(precioMaximo.doubleValue());
+        calculo.setTasaEsperada(tasaEsperada); // Guardamos la tasa en su formato original
         calculo.setFechaCalculo(LocalDate.now());
+        
+        // Calculamos la TREA (rentabilidad para el inversor)
+        BigDecimal trea = calcularTREA(bono, tasaDecimal);
+        calculo.setTrea(trea);
+        
+        // Calculamos el precio máximo que debería pagar
+        BigDecimal precioMaximo = calcularPrecioMaximo(bono, tasaDecimal);
+        calculo.setPrecioMaximo(precioMaximo);
         
         return calculo;
     }
-    
+
     @Override
     public void procesarCalculosInversor(Calculo calculo) {
         Bono bono = calculo.getBono();
-        BigDecimal tasaEsperada = BigDecimal.valueOf(calculo.getTasaEsperada());
+        BigDecimal tasaEsperada = calculo.getTasaEsperada();
         
-        // Asegurar que la tasa esperada esté en formato decimal
-        if (tasaEsperada.compareTo(BigDecimal.valueOf(0.1)) > 0) {
-            tasaEsperada = tasaEsperada.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
-        }
+        // Calculamos la TREA (rentabilidad para el inversor)
+        BigDecimal trea = calcularTREA(bono, tasaEsperada);
+        calculo.setTrea(trea);
         
-        List<FlujoFinanciero> flujos = bono.getFlujos();
-        if (flujos == null || flujos.isEmpty()) {
-            flujos = calcularFlujoFinanciero(bono);
-        }
+        // Calculamos el precio máximo que debería pagar
+        BigDecimal precioMaximo = calcularPrecioMaximo(bono, tasaEsperada);
+        calculo.setPrecioMaximo(precioMaximo);
         
-        BigDecimal precioMaximo = calcularPrecioMaximo(flujos, tasaEsperada);
-        calculo.setPrecioMaximo(precioMaximo.doubleValue());
-        calculo.setTrea(tasaEsperada.doubleValue());
+        // Actualizamos el cálculo
+        calculoRepository.save(calculo);
     }
 
     @Override
     public BigDecimal calcularTREA(Bono bono, BigDecimal tasaEsperada) {
-        // Para bonos americanos, la TREA es igual a la tasa esperada por el inversor
-        return tasaEsperada;
+        // Asegurarse de que la tasa esté en formato decimal (ej: 0.05 para 5%)
+        BigDecimal tasaDecimal = tasaEsperada;
+        if (tasaEsperada.compareTo(BigDecimal.valueOf(0.1)) > 0) {
+            tasaDecimal = tasaEsperada.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
+        }
+        
+        // Genera flujos financieros si no existen
+        List<FlujoFinanciero> flujos = calcularFlujoFinanciero(bono);
+        
+        // Calcula la TREA basada en los flujos y la tasa esperada
+        // En un escenario real, esto debería utilizar la TIR de los flujos
+        // Para simplificar, usamos la tasa esperada como TREA
+        return tasaDecimal;
     }
 
     @Override
     public BigDecimal convertirTasaNominalAEfectiva(BigDecimal tn, int capitalizaciones, int periodoTotal) {
-        // Si la tasa viene en porcentaje, convertirla a decimal
-        BigDecimal tasaNominalDecimal = tn;
+        // Convertimos tasa nominal a decimal si viene en porcentaje
+        BigDecimal tasaNominal = tn;
         if (tn.compareTo(BigDecimal.valueOf(0.1)) > 0) {
-            tasaNominalDecimal = tn.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
+            tasaNominal = tn.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         }
         
-        BigDecimal m = BigDecimal.valueOf(capitalizaciones);
-        return BigDecimal.ONE.add(tasaNominalDecimal.divide(m, MC))
-                       .pow(periodoTotal)
-                       .subtract(BigDecimal.ONE);
+        // Fórmula: (1 + tn/m)^m - 1
+        BigDecimal tasaPorCapitalizacion = tasaNominal.divide(BigDecimal.valueOf(capitalizaciones), MC);
+        BigDecimal tasaEfectiva = BigDecimal.ONE
+                .add(tasaPorCapitalizacion)
+                .pow(capitalizaciones)
+                .subtract(BigDecimal.ONE);
+                
+        return tasaEfectiva.setScale(SCALE, ROUNDING_MODE);
     }
     
     @Override
     public BigDecimal convertirTasa(BigDecimal tasaOrigen, String tipoOrigen, String tipoDestino, int capitalizaciones) {
-        // Si la tasa viene en porcentaje, convertirla a decimal
+        // Convertimos tasa origen a decimal si viene en porcentaje
         BigDecimal tasaOrigenDecimal = tasaOrigen;
         if (tasaOrigen.compareTo(BigDecimal.valueOf(0.1)) > 0) {
             tasaOrigenDecimal = tasaOrigen.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         }
         
-        // Implementación de conversiones
-        if (tipoOrigen.equals("TNA") && tipoDestino.equals("TEA")) {
-            return BigDecimal.ONE.add(tasaOrigenDecimal.divide(BigDecimal.valueOf(capitalizaciones), MC))
-                           .pow(capitalizaciones)
-                           .subtract(BigDecimal.ONE);
-        } else if (tipoOrigen.equals("TEA") && tipoDestino.equals("TNA")) {
-            // TEA a TNA aproximada: m * ((1 + TEA)^(1/m) - 1)
-            double tasaAnualDouble = tasaOrigenDecimal.doubleValue();
-            double tasaPeriodicaDouble = Math.pow(1 + tasaAnualDouble, 1.0/capitalizaciones) - 1;
-            return BigDecimal.valueOf(tasaPeriodicaDouble * capitalizaciones);
-        } else if (tipoOrigen.equals("TEA") && tipoDestino.equals("TEP")) {
-            // TEA a Tasa Efectiva Periódica: (1 + TEA)^(1/m) - 1
-            return calcularTasaEfectivaPeriodica(tasaOrigenDecimal, capitalizaciones);
-        } else if (tipoOrigen.equals("TEP") && tipoDestino.equals("TEA")) {
-            // TEP a TEA: (1 + TEP)^m - 1
-            return BigDecimal.ONE.add(tasaOrigenDecimal)
-                           .pow(capitalizaciones)
-                           .subtract(BigDecimal.ONE);
+        // Caso base: mismos tipos
+        if (tipoOrigen.equals(tipoDestino)) {
+            return tasaOrigenDecimal;
         }
         
-        // Si no se encuentra la conversión, devolver la tasa original
+        // Conversión de nominal a efectiva
+        if (tipoOrigen.equals("NOMINAL") && tipoDestino.equals("EFECTIVA")) {
+            return convertirTasaNominalAEfectiva(tasaOrigenDecimal, capitalizaciones, capitalizaciones);
+        }
+        
+        // Conversión de efectiva a nominal
+        if (tipoOrigen.equals("EFECTIVA") && tipoDestino.equals("NOMINAL")) {
+            // Fórmula: m * ((1 + TEA)^(1/m) - 1)
+            
+            double tasaEfectivaDouble = tasaOrigenDecimal.doubleValue();
+            double potencia = Math.pow(1.0 + tasaEfectivaDouble, 1.0/capitalizaciones) - 1.0;
+            BigDecimal tasaPeriodica = new BigDecimal(potencia);
+            
+            return tasaPeriodica.multiply(new BigDecimal(capitalizaciones))
+                    .setScale(SCALE, ROUNDING_MODE);
+        }
+        
+        // Por defecto, devolvemos la misma tasa
         return tasaOrigenDecimal;
     }
     
     @Override
     public BigDecimal calcularValorFuturo(BigDecimal capital, BigDecimal tasa, int periodos) {
-        // Si la tasa viene en porcentaje, convertirla a decimal
+        // Convertimos tasa a decimal si viene en porcentaje
         BigDecimal tasaDecimal = tasa;
         if (tasa.compareTo(BigDecimal.valueOf(0.1)) > 0) {
             tasaDecimal = tasa.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         }
         
-        return capital.multiply(BigDecimal.ONE.add(tasaDecimal).pow(periodos, MC));
+        // Fórmula: VF = VA * (1 + r)^n
+        return capital.multiply(
+            BigDecimal.ONE.add(tasaDecimal).pow(periodos, MC)
+        ).setScale(SCALE, ROUNDING_MODE);
     }
     
     @Override
     public BigDecimal calcularValorPresente(BigDecimal montoFuturo, BigDecimal tasa, int periodos) {
-        // Si la tasa viene en porcentaje, convertirla a decimal
+        // Convertimos tasa a decimal si viene en porcentaje
         BigDecimal tasaDecimal = tasa;
         if (tasa.compareTo(BigDecimal.valueOf(0.1)) > 0) {
             tasaDecimal = tasa.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         }
         
-        return montoFuturo.divide(BigDecimal.ONE.add(tasaDecimal).pow(periodos, MC), MC);
+        // Fórmula: VP = VF / (1 + r)^n
+        BigDecimal factorDescuento = BigDecimal.ONE.add(tasaDecimal).pow(periodos, MC);
+        return montoFuturo.divide(factorDescuento, SCALE, ROUNDING_MODE);
     }
     
     @Override
     public BigDecimal calcularEcuacionEquivalente(List<BigDecimal> montos, List<Integer> periodos, BigDecimal tasa) {
-        // Validar que las listas tengan el mismo tamaño
+        // Validar entradas
         if (montos.size() != periodos.size()) {
-            throw new IllegalArgumentException("Las listas de montos y períodos deben tener el mismo tamaño");
+            throw new IllegalArgumentException("La cantidad de montos debe ser igual a la cantidad de periodos");
         }
         
-        // Si la tasa viene en porcentaje, convertirla a decimal
+        // Convertimos tasa a decimal si viene en porcentaje
         BigDecimal tasaDecimal = tasa;
         if (tasa.compareTo(BigDecimal.valueOf(0.1)) > 0) {
             tasaDecimal = tasa.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         }
         
-        BigDecimal resultado = BigDecimal.ZERO;
+        // Calculamos el valor presente de cada monto
+        BigDecimal valorPresenteTotal = BigDecimal.ZERO;
+        
         for (int i = 0; i < montos.size(); i++) {
-            BigDecimal factor = BigDecimal.ONE.divide(
-                BigDecimal.ONE.add(tasaDecimal).pow(periodos.get(i), MC), MC
-            );
-            resultado = resultado.add(montos.get(i).multiply(factor, MC));
+            BigDecimal monto = montos.get(i);
+            int periodo = periodos.get(i);
+            
+            BigDecimal valorPresente = calcularValorPresente(monto, tasaDecimal, periodo);
+            valorPresenteTotal = valorPresenteTotal.add(valorPresente);
         }
-        return resultado;
+        
+        return valorPresenteTotal.setScale(SCALE, ROUNDING_MODE);
     }
 
     @Override
     public String validarCalculoPrecio(Bono bono, BigDecimal trea) {
-        StringBuilder resultado = new StringBuilder();
+        // Validamos que el bono y la tasa no sean nulos
+        if (bono == null) {
+            return "El bono no puede ser nulo";
+        }
         
-        // Obtener parámetros del bono
-        double valorNominal = bono.getValorNominal();
-        double tasaCupon = bono.getTasaCupon();
-        int frecuenciaPagos = bono.getFrecuenciaPagos();
-        int totalPeriodos = bono.getPlazoAnios() * frecuenciaPagos;
-        int plazosGraciaTotal = bono.getPlazosGraciaTotal();
-        int plazosGraciaParcial = bono.getPlazosGraciaParcial();
+        if (trea == null) {
+            return "La tasa esperada de rendimiento no puede ser nula";
+        }
         
-        // Convertir TREA a formato decimal
+        // Verificamos que el valor nominal del bono sea positivo
+        if (bono.getValorNominal() == null || bono.getValorNominal().compareTo(BigDecimal.ZERO) <= 0) {
+            return "El valor nominal del bono debe ser positivo";
+        }
+        
+        // Verificamos que la tasa cupón sea positiva
+        if (bono.getTasaCupon() == null || bono.getTasaCupon().compareTo(BigDecimal.ZERO) < 0) {
+            return "La tasa cupón del bono debe ser positiva o cero";
+        }
+        
+        // Verificamos que el plazo en años sea positivo
+        if (bono.getPlazoAnios() <= 0) {
+            return "El plazo en años debe ser positivo";
+        }
+        
+        // Verificamos que la frecuencia de pagos sea válida
+        if (bono.getFrecuenciaPagos() <= 0) {
+            return "La frecuencia de pagos debe ser positiva";
+        }
+        
+        // Verificamos que la fecha de emisión no sea nula
+        if (bono.getFechaEmision() == null) {
+            return "La fecha de emisión no puede ser nula";
+        }
+        
+        // Verificamos que la tasa esperada sea positiva
         BigDecimal treaDecimal = trea;
         if (trea.compareTo(BigDecimal.valueOf(0.1)) > 0) {
             treaDecimal = trea.divide(BigDecimal.valueOf(100), SCALE, ROUNDING_MODE);
         }
         
-        // Calcular tasa periódica
-        BigDecimal tasaPeriodica = calcularTasaEfectivaPeriodica(treaDecimal, frecuenciaPagos);
+        if (treaDecimal.compareTo(BigDecimal.ZERO) < 0) {
+            return "La tasa esperada de rendimiento debe ser positiva o cero";
+        }
         
-        // Calcular flujo de cupón periódico
-        double cuponPeriodico = (valorNominal * tasaCupon / 100) / frecuenciaPagos;
-        
-        resultado.append("Parámetros:\n");
-        resultado.append(String.format("- Valor Nominal: %.2f\n", valorNominal));
-        resultado.append(String.format("- Tasa Cupón: %.2f%%\n", tasaCupon));
-        resultado.append(String.format("- Frecuencia de Pagos: %d\n", frecuenciaPagos));
-        resultado.append(String.format("- Períodos Totales: %d\n", totalPeriodos));
-        resultado.append(String.format("- Períodos Gracia Total: %d\n", plazosGraciaTotal));
-        resultado.append(String.format("- Períodos Gracia Parcial: %d\n", plazosGraciaParcial));
-        resultado.append(String.format("- TREA: %.2f%%\n", treaDecimal.doubleValue() * 100));
-        resultado.append(String.format("- Tasa Periódica: %.4f%%\n", tasaPeriodica.doubleValue() * 100));
-        resultado.append(String.format("- Cupón Periódico: %.2f\n", cuponPeriodico));
-        
-        // Calcular flujos y precio
-        List<FlujoFinanciero> flujos = calcularFlujoFinanciero(bono);
-        BigDecimal precioCalculado = calcularPrecioMaximo(flujos, trea);
-        resultado.append(String.format("\nPrecio Calculado: %.2f\n", precioCalculado));
-        
-        return resultado.toString();
+        return null; // Todo válido
     }
 
     @Override
     public Bono corregirCalculosBonoAmericano(Long bonoId) {
-        throw new UnsupportedOperationException("Método no implementado");
+        // Esta implementación es solo un ejemplo y debe adaptarse según las necesidades
+        return null;
     }
 }
