@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bonofacil-backend
+    env: java
+    plan: free
+    buildCommand: "./mvnw clean package -DskipTests"
+    startCommand: "java -jar target/*.jar"
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: production
+      # Agrega aquí tus variables de entorno personalizadas, por ejemplo:
+      # - key: DB_URL
+      #   value: tu_url_de_base_de_datos 
